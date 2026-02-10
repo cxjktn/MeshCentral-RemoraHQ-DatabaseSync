@@ -1,19 +1,19 @@
 {
   "name": "RemoraHQ - DatabaseSync",
   "shortName": "remorahqdatabasesync",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "author": "RemoraHQ",
   "description": "Database connect for Remora",
   "hasAdminPanel": false,
   
-  "homepage": "https://github.com/ваш-юзернейм/remorahq-databasesync",
-  "changelogUrl": "https://raw.githubusercontent.com/ваш-юзернейм/remorahq-databasesync/main/CHANGELOG.md",
-  "configUrl": "https://raw.githubusercontent.com/ваш-юзернейм/remorahq-databasesync/main/config.json",
-  "downloadUrl": "https://github.com/ваш-юзернейм/remorahq-databasesync/archive/refs/heads/main.zip",
+  "homepage": "https://github.com/cxjktn/MeshCentral-RemoraHQ-DatabaseSync/",
+  "changelogUrl": "https://raw.githubusercontent.com/cxjktn/MeshCentral-RemoraHQ-DatabaseSync/refs/heads/main/CHANGELOG.md",
+  "configUrl": "https://raw.githubusercontent.com/cxjktn/MeshCentral-RemoraHQ-DatabaseSync/refs/heads/main/config.json",
+  "downloadUrl": "https://github.com/cxjktn/MeshCentral-RemoraHQ-DatabaseSync/archive/refs/heads/main.zip",
   "repository": {
     "type": "git",
-    "url": "https://github.com/ваш-юзернейм/remorahq-databasesync.git"
+    "url": "https://github.com/cxjktn/MeshCentral-RemoraHQ-DatabaseSync.git"
   },
-  "versionHistoryUrl": "https://api.github.com/repos/ваш-юзернейм/remorahq-databasesync/tags",
+  "versionHistoryUrl": "https://api.github.com/repos/cxjktn/MeshCentral-RemoraHQ-DatabaseSync/tags",
   "meshCentralCompat": ">=1.1.36"
 }
