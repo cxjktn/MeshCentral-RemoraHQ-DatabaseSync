@@ -5,7 +5,7 @@ module.exports.remorahqdatabasesync = function (parent) {
   var obj = {}
 
   obj.pluginid = 'remorahqdatabasesync'
-  obj.version = '0.2.0'
+  obj.version = '0.3.1'
   obj.hasAdminPanel = true
 
   function probeMongoDb(connectionString) {
