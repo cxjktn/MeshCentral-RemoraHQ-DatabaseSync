@@ -1,7 +1,7 @@
 {
   "name": "RemoraHQ - DatabaseSync",
   "shortName": "remorahqdatabasesync",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "author": "RemoraHQ",
   "description": "Database connect for Remora",
   "hasAdminPanel": false,

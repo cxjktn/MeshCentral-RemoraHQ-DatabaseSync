@@ -1,135 +1,166 @@
-const SUPPORTED_DB_TYPES = ['mssql', 'postgres', 'mysql']
+var MongoClient = null
+try { MongoClient = require('mongodb').MongoClient } catch (e) { }
 
 module.exports.remorahqdatabasesync = function (parent) {
-  const obj = {}
+  var obj = {}
 
   obj.pluginid = 'remorahqdatabasesync'
-  obj.version = '0.1.1'
-  
-  const pluginConfig = parent.config.plugins
+  obj.version = '0.2.0'
+
+  var pluginConfig = (parent.config && parent.config.plugins)
     ? parent.config.plugins[obj.pluginid] || {}
     : {}
 
-  function log (...args) {
-    parent.debug(1, 'RemoraHQ-DatabaseSync:', ...args)
+  var state = {
+    connections: {},
+    lastProbeResults: {}
   }
 
-  const state = {
-    databases: (pluginConfig.databases || []).map((db) => ({
-      id: db.id,
-      type: db.type,
-      hasConnectionString: !!db.connectionString,
-      lastStatus: 'unknown',
-      lastError: null,
-      lastMetrics: null,
-    })),
-  }
-  
-  async function probeDatabase (dbConfig) {
-    return {
-      ok: true,
-      metrics: {
-        connections: Math.floor(Math.random() * 50),
-        cpuPercent: Math.round(Math.random() * 80),
-        queriesPerSecond: Math.round(Math.random() * 1000) / 10,
-      },
-    }
-  }
-
-  function handleControlMessage (user, ws, message) {
-    if (!message || message.action !== 'dbsync') return false
-
-    const sub = message.sub
-    const response = {
-      action: 'dbsync',
-      sub,
-      responseid: message.responseid,
-      sessionid: message.sessionid,
-    }
-
-    if (sub === 'list') {
-      response.result = 'ok'
-      response.databases = state.databases
-      try { ws.send(JSON.stringify(response)) } catch (e) { }
-      return true
-    }
-
-    if (sub === 'probe') {
-      const id = message.id
-      const db = state.databases.find((x) => x.id === id)
-      if (!db) {
-        response.result = 'notfound'
-        try { ws.send(JSON.stringify(response)) } catch (e) { }
-        return true
-      }
-      
-      probeDatabase(db)
-        .then((res) => {
-          db.lastStatus = res.ok ? 'online' : 'error'
-          db.lastError = res.ok ? null : (res.error || 'Unknown error')
-          db.lastMetrics = res.metrics || null
-
-          response.result = res.ok ? 'ok' : 'error'
-          response.metrics = res.metrics || null
-          response.error = res.error || null
-          try { ws.send(JSON.stringify(response)) } catch (e) { }
-        })
-        .catch((err) => {
-          db.lastStatus = 'error'
-          db.lastError = err.message
-          db.lastMetrics = null
-
-          response.result = 'error'
-          response.error = err.message
-          try { ws.send(JSON.stringify(response)) } catch (e) { }
-        })
-
-      return true
-    }
-
-    response.result = 'unsupported'
-    try { ws.send(JSON.stringify(response)) } catch (e) { }
-    return true
-  }
-
-  obj.start = function () {
-    if (!pluginConfig.enabled) {
-      log('disabled in config, skipping init')
+  obj.serveraction = function (command, myobj, parent) {
+    var sub = command.pluginaction || command.sub
+    if (!sub) {
+      try { myobj.send(JSON.stringify({ action: 'plugin', plugin: obj.pluginid, result: 'error', error: 'Missing pluginaction' })) } catch (e) { }
       return
     }
 
-    if (!Array.isArray(pluginConfig.databases) || pluginConfig.databases.length === 0) {
-      log('no databases configured in plugins.remorahq-databasesync.databases')
+    var response = {
+      action: 'plugin',
+      plugin: obj.pluginid,
+      pluginaction: sub,
+      responseid: command.responseid
+    }
+
+    if (sub === 'probe') {
+      var connStr = command.connectionString
+      if (!connStr || typeof connStr !== 'string') {
+        response.result = 'error'
+        response.error = 'Missing connectionString'
+        try { myobj.send(JSON.stringify(response)) } catch (e) { }
+        return
+      }
+
+      if (!MongoClient) {
+        response.result = 'error'
+        response.error = 'MongoDB driver (npm package "mongodb") is not installed on the MeshCentral server. Run: npm install mongodb'
+        try { myobj.send(JSON.stringify(response)) } catch (e) { }
+        return
+      }
+
+      probeMongoDb(connStr).then(function (res) {
+        response.result = res.ok ? 'ok' : 'error'
+        response.error = res.error || null
+        response.metrics = res.metrics || null
+        response.dbName = res.dbName || null
+        response.collections = res.collections || null
+        try { myobj.send(JSON.stringify(response)) } catch (e) { }
+      }).catch(function (err) {
+        response.result = 'error'
+        response.error = err.message
+        try { myobj.send(JSON.stringify(response)) } catch (e) { }
+      })
+
+      return
+    }
+
+    if (sub === 'ping') {
+      response.result = 'ok'
+      response.version = obj.version
+      response.mongoDriverInstalled = !!MongoClient
+      try { myobj.send(JSON.stringify(response)) } catch (e) { }
+      return
+    }
+
+    response.result = 'error'
+    response.error = 'Unknown pluginaction: ' + sub
+    try { myobj.send(JSON.stringify(response)) } catch (e) { }
+  }
+
+  function probeMongoDb(connectionString) {
+    return new Promise(function (resolve) {
+      var client = null
+      MongoClient.connect(connectionString, {
+        maxPoolSize: 2,
+        serverSelectionTimeoutMS: 8000,
+        connectTimeoutMS: 8000
+      }).then(function (c) {
+        client = c
+        var db = client.db()
+        var dbName = db.databaseName
+
+        return Promise.all([
+          db.admin().serverStatus().catch(function () { return null }),
+          db.listCollections().toArray().catch(function () { return [] }),
+          db.stats().catch(function () { return null }),
+          Promise.resolve(dbName)
+        ])
+      }).then(function (results) {
+        var serverStatus = results[0]
+        var collections = results[1]
+        var dbStats = results[2]
+        var dbName = results[3]
+
+        var metrics = {
+          connections: 0,
+          availableConnections: 0,
+          opcounters: null,
+          uptime: 0,
+          version: 'unknown',
+          storageSize: 0,
+          dataSize: 0,
+          objects: 0,
+          replicaSet: null
+        }
+
+        if (serverStatus) {
+          metrics.connections = (serverStatus.connections && serverStatus.connections.current) || 0
+          metrics.availableConnections = (serverStatus.connections && serverStatus.connections.available) || 0
+          metrics.opcounters = serverStatus.opcounters || null
+          metrics.uptime = serverStatus.uptime || 0
+          metrics.version = serverStatus.version || 'unknown'
+          if (serverStatus.repl) {
+            metrics.replicaSet = {
+              setName: serverStatus.repl.setName || null,
+              ismaster: serverStatus.repl.ismaster || false,
+              primary: serverStatus.repl.primary || null,
+              hosts: serverStatus.repl.hosts || []
+            }
+          }
+        }
+
+        if (dbStats) {
+          metrics.storageSize = dbStats.storageSize || 0
+          metrics.dataSize = dbStats.dataSize || 0
+          metrics.objects = dbStats.objects || 0
+        }
+
+        var collectionNames = collections.map(function (c) { return c.name })
+
+        if (client) { client.close().catch(function () { }) }
+
+        resolve({
+          ok: true,
+          dbName: dbName,
+          metrics: metrics,
+          collections: collectionNames
+        })
+      }).catch(function (err) {
+        if (client) { try { client.close() } catch (e) { } }
+        resolve({ ok: false, error: err.message })
+      })
+    })
+  }
+
+  obj.server_startup = function () {
+    if (MongoClient) {
+      console.log('[RemoraHQ-DatabaseSync] Plugin loaded v' + obj.version + ' (MongoDB driver available)')
     } else {
-      const invalid = pluginConfig.databases.filter(
-        (db) => !SUPPORTED_DB_TYPES.includes(db.type),
-      )
-      if (invalid.length) {
-        log('warning: some databases have unsupported type:', invalid)
-      }
-      log('loaded databases from config:', pluginConfig.databases.map((d) => d.id).join(', '))
+      console.log('[RemoraHQ-DatabaseSync] Plugin loaded v' + obj.version + ' (MongoDB driver NOT installed — run: npm install mongodb)')
     }
-
-    if (parent.addServerDispatchHook) {
-      parent.addServerDispatchHook('dbsync', handleControlMessage)
-    } else if (parent.DispatchEvent) {
-      const oldHandler = parent.onControlMessage
-      parent.onControlMessage = function (user, ws, message) {
-        if (handleControlMessage(user, ws, message) === true) return
-        if (typeof oldHandler === 'function') oldHandler(user, ws, message)
-      }
-    }
-
-    log('started, version', obj.version)
   }
 
-  obj.stop = function () {
-    log('stopped')
+  obj.server_shutdown = function () {
+    console.log('[RemoraHQ-DatabaseSync] Plugin stopped')
   }
-
-  obj.server_startup = obj.start
-  obj.server_shutdown = obj.stop
 
   return obj
 }
-
