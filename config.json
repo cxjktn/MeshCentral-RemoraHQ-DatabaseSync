@@ -4,7 +4,7 @@
   "version": "0.2.0",
   "author": "RemoraHQ",
   "description": "Database connect for Remora",
-  "hasAdminPanel": false,
+  "hasAdminPanel": true,
   
   "homepage": "https://github.com/cxjktn/MeshCentral-RemoraHQ-DatabaseSync/",
   "changelogUrl": "https://raw.githubusercontent.com/cxjktn/MeshCentral-RemoraHQ-DatabaseSync/refs/heads/main/CHANGELOG.md",
