@@ -1,0 +1,19 @@
+{
+  "name": "RemoraHQ - DatabaseSync",
+  "shortName": "remorahqdatabasesync",
+  "version": "0.0.1",
+  "author": "RemoraHQ",
+  "description": "Database connect for Remora",
+  "hasAdminPanel": false,
+  
+  "homepage": "https://github.com/ваш-юзернейм/remorahq-databasesync",
+  "changelogUrl": "https://raw.githubusercontent.com/ваш-юзернейм/remorahq-databasesync/main/CHANGELOG.md",
+  "configUrl": "https://raw.githubusercontent.com/ваш-юзернейм/remorahq-databasesync/main/config.json",
+  "downloadUrl": "https://github.com/ваш-юзернейм/remorahq-databasesync/archive/refs/heads/main.zip",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ваш-юзернейм/remorahq-databasesync.git"
+  },
+  "versionHistoryUrl": "https://api.github.com/repos/ваш-юзернейм/remorahq-databasesync/tags",
+  "meshCentralCompat": ">=1.1.36"
+}
