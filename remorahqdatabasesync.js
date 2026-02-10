@@ -3,7 +3,7 @@ const SUPPORTED_DB_TYPES = ['mssql', 'postgres', 'mysql']
 module.exports = function (parent) {
   const obj = {}
 
-  obj.pluginid = 'remorahq-databasesync'
+  obj.pluginid = 'remorahqdatabasesync'
   obj.version = '0.1.0'
   
   const pluginConfig = parent.config.plugins
