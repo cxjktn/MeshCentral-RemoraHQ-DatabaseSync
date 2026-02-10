@@ -1,10 +1,10 @@
 const SUPPORTED_DB_TYPES = ['mssql', 'postgres', 'mysql']
 
-module.exports = function (parent) {
+module.exports.remorahqdatabasesync = function (parent) {
   const obj = {}
 
   obj.pluginid = 'remorahqdatabasesync'
-  obj.version = '0.1.0'
+  obj.version = '0.1.1'
   
   const pluginConfig = parent.config.plugins
     ? parent.config.plugins[obj.pluginid] || {}
@@ -18,7 +18,6 @@ module.exports = function (parent) {
     databases: (pluginConfig.databases || []).map((db) => ({
       id: db.id,
       type: db.type,
-      // connectionString не сохраняем целиком в state для безопасности
       hasConnectionString: !!db.connectionString,
       lastStatus: 'unknown',
       lastError: null,
@@ -127,6 +126,9 @@ module.exports = function (parent) {
   obj.stop = function () {
     log('stopped')
   }
+
+  obj.server_startup = obj.start
+  obj.server_shutdown = obj.stop
 
   return obj
 }
