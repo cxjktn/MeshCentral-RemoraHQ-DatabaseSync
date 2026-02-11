@@ -12,7 +12,7 @@ module.exports.remorahqdatabasesync = function (parent) {
   var obj = {}
 
   obj.pluginid = 'remorahqdatabasesync'
-  obj.version = '0.4.0'
+  obj.version = '0.4.1'
   obj.hasAdminPanel = true
 
   var settingsDb = null
@@ -311,10 +311,6 @@ module.exports.remorahqdatabasesync = function (parent) {
         
         var probeStartTime = Date.now()
         return Promise.all([
-          db.admin().serverStatus().catch(function (err) { 
-            console.log('[RemoraHQ-DatabaseSync] Error getting serverStatus:', err.message)
-            return null 
-          }),
           db.listCollections().toArray().catch(function () { return [] }),
           db.stats().catch(function () { return null }),
           Promise.resolve(dbName),
@@ -322,16 +318,17 @@ module.exports.remorahqdatabasesync = function (parent) {
           Promise.resolve(probeStartTime)
         ])
       }).then(function (results) {
-        var connectLatency = results[4]
-        var probeLatency = Date.now() - results[5]
+        var connectLatency = results[3]
+        var probeLatency = Date.now() - results[4]
         var finalLatency = connectLatency
         
-        var serverStatus = results[0]
-        var collections = results[1]
-        var dbStats = results[2]
-        var dbName = results[3]
+        var collections = results[0]
+        var dbStats = results[1]
+        var dbName = results[2]
         var systemMetrics = getSystemMetrics()
         var diskSpace = getDiskSpace()
+        
+        var serverStatus = null
         
         logEvent(dbId, 'PROBE', 'Probing database: ' + dbName + ' (latency: ' + finalLatency + 'ms)')
         
@@ -391,12 +388,6 @@ module.exports.remorahqdatabasesync = function (parent) {
             }
           }
           
-          if (networkIO.total === 0 && serverStatus && serverStatus.network) {
-            networkIO.in = (serverStatus.network.bytesIn || 0) / (1024 * 1024)
-            networkIO.out = (serverStatus.network.bytesOut || 0) / (1024 * 1024)
-            networkIO.total = networkIO.in + networkIO.out
-            console.log('[RemoraHQ-DatabaseSync] Using MongoDB network stats - IN:', networkIO.in.toFixed(2), 'MB, OUT:', networkIO.out.toFixed(2), 'MB')
-          }
         } catch (e) {
           console.log('[RemoraHQ-DatabaseSync] Error getting network I/O:', e.message)
           networkIO = { in: 0, out: 0, total: 0 }
@@ -414,39 +405,14 @@ module.exports.remorahqdatabasesync = function (parent) {
           diskSpace: diskSpace
         }
         
-        if (serverStatus) {
-          console.log('[RemoraHQ-DatabaseSync] ServerStatus object keys:', Object.keys(serverStatus))
-          console.log('[RemoraHQ-DatabaseSync] ServerStatus.uptime raw:', serverStatus.uptime, 'type:', typeof serverStatus.uptime)
-          
-          metrics.connections = (serverStatus.connections && serverStatus.connections.current) || 0
-          metrics.availableConnections = (serverStatus.connections && serverStatus.connections.available) || 0
-          metrics.opcounters = serverStatus.opcounters || null
-          metrics.uptime = serverStatus.uptime || 0
-          metrics.version = serverStatus.version || 'unknown'
-          
-          console.log('[RemoraHQ-DatabaseSync] ServerStatus uptime:', serverStatus.uptime, 'seconds')
-          console.log('[RemoraHQ-DatabaseSync] Metrics uptime:', metrics.uptime)
-          
-          if (!serverStatus.uptime || serverStatus.uptime === 0) {
-            console.log('[RemoraHQ-DatabaseSync] WARNING: uptime is 0 or missing! Trying alternative method...')
-            try {
-              var processUptime = process.uptime()
-              if (processUptime > 0) {
-                console.log('[RemoraHQ-DatabaseSync] Using process uptime as fallback:', processUptime, 'seconds')
-                metrics.uptime = Math.floor(processUptime)
-              }
-            } catch (e) {
-              console.log('[RemoraHQ-DatabaseSync] Could not get alternative uptime:', e.message)
-            }
+        try {
+          var processUptime = process.uptime()
+          if (processUptime > 0) {
+            metrics.uptime = Math.floor(processUptime)
+            console.log('[RemoraHQ-DatabaseSync] Using process uptime:', metrics.uptime, 'seconds')
           }
-          if (serverStatus.repl) {
-            metrics.replicaSet = {
-              setName: serverStatus.repl.setName || null,
-              ismaster: serverStatus.repl.ismaster || false,
-              primary: serverStatus.repl.primary || null,
-              hosts: serverStatus.repl.hosts || []
-            }
-          }
+        } catch (e) {
+          console.log('[RemoraHQ-DatabaseSync] Could not get process uptime:', e.message)
         }
         if (dbStats) {
           metrics.storageSize = Math.round((dbStats.storageSize || 0) * 100) / 100
