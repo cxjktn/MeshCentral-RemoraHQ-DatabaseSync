@@ -5,7 +5,7 @@ module.exports.remorahqdatabasesync = function (parent) {
   var obj = {}
 
   obj.pluginid = 'remorahqdatabasesync'
-  obj.version = '0.3.1'
+  obj.version = '0.3.2'
   obj.hasAdminPanel = true
 
   function probeMongoDb(connectionString) {
@@ -108,7 +108,7 @@ module.exports.remorahqdatabasesync = function (parent) {
     }
     var sendFn = function (data) {
       try {
-        if (typeof myobj.send === 'function') { myobj.send(JSON.stringify(data)); return }
+        if (typeof myobj.send === 'function') { myobj.send(data); return }
         if (myobj.ws && typeof myobj.ws.send === 'function') { myobj.ws.send(JSON.stringify(data)); return }
       } catch (e) { }
     }
