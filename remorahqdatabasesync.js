@@ -12,7 +12,7 @@ module.exports.remorahqdatabasesync = function (parent) {
   var obj = {}
 
   obj.pluginid = 'remorahqdatabasesync'
-  obj.version = '0.3.7'
+  obj.version = '0.3.8'
   obj.hasAdminPanel = true
 
   var settingsDb = null
@@ -310,7 +310,10 @@ module.exports.remorahqdatabasesync = function (parent) {
         
         var probeStartTime = Date.now()
         return Promise.all([
-          db.admin().serverStatus().catch(function () { return null }),
+          db.admin().serverStatus().catch(function (err) { 
+            console.log('[RemoraHQ-DatabaseSync] Error getting serverStatus:', err.message)
+            return null 
+          }),
           db.listCollections().toArray().catch(function () { return [] }),
           db.stats().catch(function () { return null }),
           Promise.resolve(dbName),
@@ -336,24 +339,33 @@ module.exports.remorahqdatabasesync = function (parent) {
           if (process.platform === 'win32') {
             var execSync = require('child_process').execSync
             try {
-              var netResult = execSync('netstat -e', { encoding: 'utf8', timeout: 5000 })
+              var netResult = execSync('chcp 65001 >nul && netstat -e', { encoding: 'utf8', timeout: 5000, shell: true })
               var netLines = netResult.split('\n')
               for (var i = 0; i < netLines.length; i++) {
-                if (netLines[i].indexOf('Bytes') >= 0) {
-                  var parts = netLines[i].trim().split(/\s+/)
+                var line = netLines[i]
+                if (line.indexOf('Bytes') >= 0 || line.indexOf('байт') >= 0 || /^\s*\d+/.test(line)) {
+                  var parts = line.trim().split(/\s+/)
                   if (parts.length >= 3) {
-                    var bytesIn = parseFloat(parts[1].replace(/,/g, '')) || 0
-                    var bytesOut = parseFloat(parts[2].replace(/,/g, '')) || 0
-                    networkIO.in = bytesIn / (1024 * 1024)
-                    networkIO.out = bytesOut / (1024 * 1024)
-                    networkIO.total = networkIO.in + networkIO.out
-                    console.log('[RemoraHQ-DatabaseSync] Network I/O from netstat - IN:', networkIO.in.toFixed(2), 'MB/s, OUT:', networkIO.out.toFixed(2), 'MB/s')
+                    var bytesIn = parseFloat(parts[parts.length - 2].replace(/,/g, '').replace(/\s/g, '')) || 0
+                    var bytesOut = parseFloat(parts[parts.length - 1].replace(/,/g, '').replace(/\s/g, '')) || 0
+                    if (bytesIn > 0 || bytesOut > 0) {
+                      networkIO.in = bytesIn / (1024 * 1024)
+                      networkIO.out = bytesOut / (1024 * 1024)
+                      networkIO.total = networkIO.in + networkIO.out
+                      console.log('[RemoraHQ-DatabaseSync] Network I/O from netstat - IN:', networkIO.in.toFixed(2), 'MB, OUT:', networkIO.out.toFixed(2), 'MB')
+                      break
+                    }
                   }
-                  break
                 }
               }
               if (networkIO.total === 0) {
-                console.log('[RemoraHQ-DatabaseSync] netstat result:', netResult.substring(0, 200))
+                console.log('[RemoraHQ-DatabaseSync] netstat parsing failed, trying MongoDB network stats')
+                if (serverStatus && serverStatus.network) {
+                  networkIO.in = (serverStatus.network.bytesIn || 0) / (1024 * 1024)
+                  networkIO.out = (serverStatus.network.bytesOut || 0) / (1024 * 1024)
+                  networkIO.total = networkIO.in + networkIO.out
+                  console.log('[RemoraHQ-DatabaseSync] Using MongoDB network stats - IN:', networkIO.in.toFixed(2), 'MB, OUT:', networkIO.out.toFixed(2), 'MB')
+                }
               }
             } catch (e) {
               console.log('[RemoraHQ-DatabaseSync] Error getting network stats from netstat:', e.message)
@@ -361,7 +373,7 @@ module.exports.remorahqdatabasesync = function (parent) {
                 networkIO.in = (serverStatus.network.bytesIn || 0) / (1024 * 1024)
                 networkIO.out = (serverStatus.network.bytesOut || 0) / (1024 * 1024)
                 networkIO.total = networkIO.in + networkIO.out
-                console.log('[RemoraHQ-DatabaseSync] Using MongoDB network stats - IN:', networkIO.in.toFixed(2), 'MB/s, OUT:', networkIO.out.toFixed(2), 'MB/s')
+                console.log('[RemoraHQ-DatabaseSync] Using MongoDB network stats - IN:', networkIO.in.toFixed(2), 'MB, OUT:', networkIO.out.toFixed(2), 'MB')
               }
             }
           } else {
@@ -369,7 +381,7 @@ module.exports.remorahqdatabasesync = function (parent) {
               networkIO.in = (serverStatus.network.bytesIn || 0) / (1024 * 1024)
               networkIO.out = (serverStatus.network.bytesOut || 0) / (1024 * 1024)
               networkIO.total = networkIO.in + networkIO.out
-              console.log('[RemoraHQ-DatabaseSync] Using MongoDB network stats - IN:', networkIO.in.toFixed(2), 'MB/s, OUT:', networkIO.out.toFixed(2), 'MB/s')
+              console.log('[RemoraHQ-DatabaseSync] Using MongoDB network stats - IN:', networkIO.in.toFixed(2), 'MB, OUT:', networkIO.out.toFixed(2), 'MB')
             }
           }
         } catch (e) {
@@ -390,13 +402,21 @@ module.exports.remorahqdatabasesync = function (parent) {
         }
         
         if (serverStatus) {
+          console.log('[RemoraHQ-DatabaseSync] ServerStatus object keys:', Object.keys(serverStatus))
+          console.log('[RemoraHQ-DatabaseSync] ServerStatus.uptime raw:', serverStatus.uptime, 'type:', typeof serverStatus.uptime)
+          
           metrics.connections = (serverStatus.connections && serverStatus.connections.current) || 0
           metrics.availableConnections = (serverStatus.connections && serverStatus.connections.available) || 0
           metrics.opcounters = serverStatus.opcounters || null
           metrics.uptime = serverStatus.uptime || 0
           metrics.version = serverStatus.version || 'unknown'
+          
           console.log('[RemoraHQ-DatabaseSync] ServerStatus uptime:', serverStatus.uptime, 'seconds')
           console.log('[RemoraHQ-DatabaseSync] Metrics uptime:', metrics.uptime)
+          
+          if (!serverStatus.uptime || serverStatus.uptime === 0) {
+            console.log('[RemoraHQ-DatabaseSync] WARNING: uptime is 0 or missing! Full serverStatus:', JSON.stringify(serverStatus).substring(0, 500))
+          }
           if (serverStatus.repl) {
             metrics.replicaSet = {
               setName: serverStatus.repl.setName || null,
