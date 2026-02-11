@@ -12,11 +12,32 @@ module.exports.remorahqdatabasesync = function (parent) {
   var obj = {}
 
   obj.pluginid = 'remorahqdatabasesync'
-  obj.version = '0.3.3'
+  obj.version = '0.3.4'
   obj.hasAdminPanel = true
 
   var settingsDb = null
-  var settingsDbPath = path.join(parent.datapath, 'settings.db')
+  var settingsDbPath = null
+  
+  if (parent && parent.parent && parent.parent.datapath) {
+    settingsDbPath = path.join(parent.parent.datapath, 'settings.db')
+  } else if (parent && parent.datapath) {
+    settingsDbPath = path.join(parent.datapath, 'settings.db')
+  } else {
+    var possiblePaths = [
+      path.join(process.cwd(), 'meshcentral-data'),
+      path.join(__dirname, '..', '..', 'meshcentral-data'),
+      path.join(__dirname, '..', 'meshcentral-data')
+    ]
+    for (var i = 0; i < possiblePaths.length; i++) {
+      if (fs.existsSync(possiblePaths[i])) {
+        settingsDbPath = path.join(possiblePaths[i], 'settings.db')
+        break
+      }
+    }
+    if (!settingsDbPath) {
+      settingsDbPath = path.join(process.cwd(), 'meshcentral-data', 'settings.db')
+    }
+  }
 
   function initSettingsDb() {
     if (!Database) {
