@@ -12,7 +12,7 @@ module.exports.remorahqdatabasesync = function (parent) {
   var obj = {}
 
   obj.pluginid = 'remorahqdatabasesync'
-  obj.version = '0.3.5'
+  obj.version = '0.3.6'
   obj.hasAdminPanel = true
 
   var settingsDb = null
@@ -198,9 +198,32 @@ module.exports.remorahqdatabasesync = function (parent) {
     var usedMem = totalMem - freeMem
     var memPercent = Math.round((usedMem / totalMem) * 100)
     
-    var cpus = os.cpus()
-    var loadAvg = os.loadavg()
-    var cpuPercent = Math.min(100, Math.round((loadAvg[0] / cpus.length) * 100))
+    var cpuPercent = 0
+    try {
+      if (process.platform === 'win32') {
+        var execSync = require('child_process').execSync
+        try {
+          var result = execSync('wmic cpu get loadpercentage /format:value', { encoding: 'utf8' })
+          var lines = result.split('\n')
+          for (var i = 0; i < lines.length; i++) {
+            if (lines[i].indexOf('LoadPercentage=') === 0) {
+              cpuPercent = parseInt(lines[i].split('=')[1]) || 0
+              break
+            }
+          }
+        } catch (e) {
+          cpuPercent = 0
+        }
+      } else {
+        var cpus = os.cpus()
+        var loadAvg = os.loadavg()
+        if (loadAvg && loadAvg.length > 0 && cpus.length > 0) {
+          cpuPercent = Math.min(100, Math.round((loadAvg[0] / cpus.length) * 100))
+        }
+      }
+    } catch (e) {
+      cpuPercent = 0
+    }
     
     return {
       memoryUsed: usedMem,
@@ -288,8 +311,9 @@ module.exports.remorahqdatabasesync = function (parent) {
           Promise.resolve(probeStartTime)
         ])
       }).then(function (results) {
+        var connectLatency = results[4]
         var probeLatency = Date.now() - results[5]
-        var avgLatency = Math.round((results[4] + probeLatency) / 2)
+        var finalLatency = connectLatency
         
         var serverStatus = results[0]
         var collections = results[1]
@@ -298,19 +322,48 @@ module.exports.remorahqdatabasesync = function (parent) {
         var systemMetrics = getSystemMetrics()
         var diskSpace = getDiskSpace()
         
-        logEvent(dbId, 'PROBE', 'Probing database: ' + dbName + ' (latency: ' + avgLatency + 'ms)')
+        logEvent(dbId, 'PROBE', 'Probing database: ' + dbName + ' (latency: ' + finalLatency + 'ms)')
         
         var networkIO = { in: 0, out: 0, total: 0 }
-        if (serverStatus && serverStatus.network) {
-          networkIO.in = (serverStatus.network.bytesIn || 0) / (1024 * 1024)
-          networkIO.out = (serverStatus.network.bytesOut || 0) / (1024 * 1024)
-          networkIO.total = networkIO.in + networkIO.out
+        try {
+          if (process.platform === 'win32') {
+            var execSync = require('child_process').execSync
+            try {
+              var netResult = execSync('netstat -e', { encoding: 'utf8' })
+              var netLines = netResult.split('\n')
+              for (var i = 0; i < netLines.length; i++) {
+                if (netLines[i].indexOf('Bytes') >= 0) {
+                  var parts = netLines[i].trim().split(/\s+/)
+                  if (parts.length >= 3) {
+                    networkIO.in = parseFloat(parts[1]) / (1024 * 1024) || 0
+                    networkIO.out = parseFloat(parts[2]) / (1024 * 1024) || 0
+                    networkIO.total = networkIO.in + networkIO.out
+                  }
+                  break
+                }
+              }
+            } catch (e) {
+              if (serverStatus && serverStatus.network) {
+                networkIO.in = (serverStatus.network.bytesIn || 0) / (1024 * 1024)
+                networkIO.out = (serverStatus.network.bytesOut || 0) / (1024 * 1024)
+                networkIO.total = networkIO.in + networkIO.out
+              }
+            }
+          } else {
+            if (serverStatus && serverStatus.network) {
+              networkIO.in = (serverStatus.network.bytesIn || 0) / (1024 * 1024)
+              networkIO.out = (serverStatus.network.bytesOut || 0) / (1024 * 1024)
+              networkIO.total = networkIO.in + networkIO.out
+            }
+          }
+        } catch (e) {
+          networkIO = { in: 0, out: 0, total: 0 }
         }
         
         var metrics = {
           connections: 0, availableConnections: 0, opcounters: null,
           uptime: 0, version: 'unknown', storageSize: 0, dataSize: 0,
-          objects: 0, replicaSet: null, latency: avgLatency,
+          objects: 0, replicaSet: null, latency: finalLatency,
           memoryUsed: systemMetrics.memoryUsed,
           memoryTotal: systemMetrics.memoryTotal,
           memoryPercent: systemMetrics.memoryPercent,
