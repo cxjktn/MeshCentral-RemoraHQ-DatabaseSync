@@ -12,7 +12,7 @@ module.exports.remorahqdatabasesync = function (parent) {
   var obj = {}
 
   obj.pluginid = 'remorahqdatabasesync'
-  obj.version = '0.3.6'
+  obj.version = '0.3.7'
   obj.hasAdminPanel = true
 
   var settingsDb = null
@@ -203,15 +203,20 @@ module.exports.remorahqdatabasesync = function (parent) {
       if (process.platform === 'win32') {
         var execSync = require('child_process').execSync
         try {
-          var result = execSync('wmic cpu get loadpercentage /format:value', { encoding: 'utf8' })
+          var result = execSync('wmic cpu get loadpercentage /format:value', { encoding: 'utf8', timeout: 5000 })
           var lines = result.split('\n')
           for (var i = 0; i < lines.length; i++) {
             if (lines[i].indexOf('LoadPercentage=') === 0) {
-              cpuPercent = parseInt(lines[i].split('=')[1]) || 0
+              cpuPercent = parseInt(lines[i].split('=')[1].trim()) || 0
+              console.log('[RemoraHQ-DatabaseSync] CPU Load from wmic:', cpuPercent + '%')
               break
             }
           }
+          if (cpuPercent === 0) {
+            console.log('[RemoraHQ-DatabaseSync] wmic result:', result)
+          }
         } catch (e) {
+          console.log('[RemoraHQ-DatabaseSync] Error getting CPU load from wmic:', e.message)
           cpuPercent = 0
         }
       } else {
@@ -219,9 +224,11 @@ module.exports.remorahqdatabasesync = function (parent) {
         var loadAvg = os.loadavg()
         if (loadAvg && loadAvg.length > 0 && cpus.length > 0) {
           cpuPercent = Math.min(100, Math.round((loadAvg[0] / cpus.length) * 100))
+          console.log('[RemoraHQ-DatabaseSync] CPU Load from loadavg:', cpuPercent + '%')
         }
       }
     } catch (e) {
+      console.log('[RemoraHQ-DatabaseSync] Error getting CPU load:', e.message)
       cpuPercent = 0
     }
     
@@ -329,24 +336,32 @@ module.exports.remorahqdatabasesync = function (parent) {
           if (process.platform === 'win32') {
             var execSync = require('child_process').execSync
             try {
-              var netResult = execSync('netstat -e', { encoding: 'utf8' })
+              var netResult = execSync('netstat -e', { encoding: 'utf8', timeout: 5000 })
               var netLines = netResult.split('\n')
               for (var i = 0; i < netLines.length; i++) {
                 if (netLines[i].indexOf('Bytes') >= 0) {
                   var parts = netLines[i].trim().split(/\s+/)
                   if (parts.length >= 3) {
-                    networkIO.in = parseFloat(parts[1]) / (1024 * 1024) || 0
-                    networkIO.out = parseFloat(parts[2]) / (1024 * 1024) || 0
+                    var bytesIn = parseFloat(parts[1].replace(/,/g, '')) || 0
+                    var bytesOut = parseFloat(parts[2].replace(/,/g, '')) || 0
+                    networkIO.in = bytesIn / (1024 * 1024)
+                    networkIO.out = bytesOut / (1024 * 1024)
                     networkIO.total = networkIO.in + networkIO.out
+                    console.log('[RemoraHQ-DatabaseSync] Network I/O from netstat - IN:', networkIO.in.toFixed(2), 'MB/s, OUT:', networkIO.out.toFixed(2), 'MB/s')
                   }
                   break
                 }
               }
+              if (networkIO.total === 0) {
+                console.log('[RemoraHQ-DatabaseSync] netstat result:', netResult.substring(0, 200))
+              }
             } catch (e) {
+              console.log('[RemoraHQ-DatabaseSync] Error getting network stats from netstat:', e.message)
               if (serverStatus && serverStatus.network) {
                 networkIO.in = (serverStatus.network.bytesIn || 0) / (1024 * 1024)
                 networkIO.out = (serverStatus.network.bytesOut || 0) / (1024 * 1024)
                 networkIO.total = networkIO.in + networkIO.out
+                console.log('[RemoraHQ-DatabaseSync] Using MongoDB network stats - IN:', networkIO.in.toFixed(2), 'MB/s, OUT:', networkIO.out.toFixed(2), 'MB/s')
               }
             }
           } else {
@@ -354,9 +369,11 @@ module.exports.remorahqdatabasesync = function (parent) {
               networkIO.in = (serverStatus.network.bytesIn || 0) / (1024 * 1024)
               networkIO.out = (serverStatus.network.bytesOut || 0) / (1024 * 1024)
               networkIO.total = networkIO.in + networkIO.out
+              console.log('[RemoraHQ-DatabaseSync] Using MongoDB network stats - IN:', networkIO.in.toFixed(2), 'MB/s, OUT:', networkIO.out.toFixed(2), 'MB/s')
             }
           }
         } catch (e) {
+          console.log('[RemoraHQ-DatabaseSync] Error getting network I/O:', e.message)
           networkIO = { in: 0, out: 0, total: 0 }
         }
         
@@ -378,6 +395,8 @@ module.exports.remorahqdatabasesync = function (parent) {
           metrics.opcounters = serverStatus.opcounters || null
           metrics.uptime = serverStatus.uptime || 0
           metrics.version = serverStatus.version || 'unknown'
+          console.log('[RemoraHQ-DatabaseSync] ServerStatus uptime:', serverStatus.uptime, 'seconds')
+          console.log('[RemoraHQ-DatabaseSync] Metrics uptime:', metrics.uptime)
           if (serverStatus.repl) {
             metrics.replicaSet = {
               setName: serverStatus.repl.setName || null,
