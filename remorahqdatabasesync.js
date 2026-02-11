@@ -12,21 +12,31 @@ module.exports.remorahqdatabasesync = function (parent) {
   var obj = {}
 
   obj.pluginid = 'remorahqdatabasesync'
-  obj.version = '0.3.4'
+  obj.version = '0.3.5'
   obj.hasAdminPanel = true
 
   var settingsDb = null
   var settingsDbPath = null
   
   if (parent && parent.parent && parent.parent.datapath) {
-    settingsDbPath = path.join(parent.parent.datapath, 'settings.db')
+    var pluginPath = path.join(parent.parent.datapath, 'plugins', 'remorahqdatabasesync')
+    if (fs.existsSync(pluginPath)) {
+      settingsDbPath = path.join(pluginPath, 'settings.db')
+    } else {
+      settingsDbPath = path.join(parent.parent.datapath, 'meshcentral-databasesync-settings.db')
+    }
   } else if (parent && parent.datapath) {
-    settingsDbPath = path.join(parent.datapath, 'settings.db')
+    var pluginPath = path.join(parent.datapath, 'plugins', 'remorahqdatabasesync')
+    if (fs.existsSync(pluginPath)) {
+      settingsDbPath = path.join(pluginPath, 'settings.db')
+    } else {
+      settingsDbPath = path.join(parent.datapath, 'meshcentral-databasesync-settings.db')
+    }
   } else {
     var possiblePaths = [
-      path.join(process.cwd(), 'meshcentral-data'),
-      path.join(__dirname, '..', '..', 'meshcentral-data'),
-      path.join(__dirname, '..', 'meshcentral-data')
+      path.join(process.cwd(), 'meshcentral-data', 'plugins', 'remorahqdatabasesync'),
+      path.join(__dirname, '..', '..', 'meshcentral-data', 'plugins', 'remorahqdatabasesync'),
+      path.join(__dirname, '..', 'meshcentral-data', 'plugins', 'remorahqdatabasesync')
     ]
     for (var i = 0; i < possiblePaths.length; i++) {
       if (fs.existsSync(possiblePaths[i])) {
@@ -35,7 +45,8 @@ module.exports.remorahqdatabasesync = function (parent) {
       }
     }
     if (!settingsDbPath) {
-      settingsDbPath = path.join(process.cwd(), 'meshcentral-data', 'settings.db')
+      var datapath = path.join(process.cwd(), 'meshcentral-data')
+      settingsDbPath = path.join(datapath, 'meshcentral-databasesync-settings.db')
     }
   }
 
@@ -66,6 +77,20 @@ module.exports.remorahqdatabasesync = function (parent) {
         CREATE INDEX IF NOT EXISTS idx_events_dbId ON events(dbId);
         CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp);
       `)
+      
+      var cleanupInterval = setInterval(function () {
+        if (settingsDb) {
+          try {
+            var oneDayAgo = Date.now() - (24 * 60 * 60 * 1000)
+            var deleted = settingsDb.prepare('DELETE FROM events WHERE timestamp < ?').run(oneDayAgo)
+            if (deleted.changes > 0) {
+              console.log('[RemoraHQ-DatabaseSync] Cleaned up ' + deleted.changes + ' old events')
+            }
+          } catch (e) {
+            console.log('[RemoraHQ-DatabaseSync] Error cleaning up events:', e.message)
+          }
+        }
+      }, 60 * 60 * 1000)
       return true
     } catch (e) {
       console.log('[RemoraHQ-DatabaseSync] Error initializing settings.db:', e.message)
@@ -185,16 +210,49 @@ module.exports.remorahqdatabasesync = function (parent) {
     }
   }
 
-  function getDiskSpace(dbPath) {
+  function getDiskSpace() {
     try {
-      var stats = fs.statSync(dbPath)
-      return {
-        size: stats.size,
-        available: 0,
-        total: 0
+      if (process.platform === 'win32') {
+        var execSync = require('child_process').execSync
+        try {
+          var drive = process.cwd().substring(0, 2)
+          var result = execSync('wmic logicaldisk where "DeviceID=\'' + drive + '\'" get Size,FreeSpace /format:value', { encoding: 'utf8' })
+          var lines = result.split('\n')
+          var freeSpace = 0
+          var totalSize = 0
+          for (var i = 0; i < lines.length; i++) {
+            if (lines[i].indexOf('FreeSpace=') === 0) {
+              freeSpace = parseInt(lines[i].split('=')[1]) || 0
+            }
+            if (lines[i].indexOf('Size=') === 0) {
+              totalSize = parseInt(lines[i].split('=')[1]) || 0
+            }
+          }
+          return {
+            size: 0,
+            available: freeSpace,
+            total: totalSize,
+            used: totalSize - freeSpace
+          }
+        } catch (e) {
+          return { size: 0, available: 0, total: 0, used: 0 }
+        }
+      } else {
+        var stats = require('fs').statfsSync ? require('fs').statfsSync('/') : null
+        if (stats) {
+          var total = stats.blocks * stats.bsize
+          var free = stats.bavail * stats.bsize
+          return {
+            size: 0,
+            available: free,
+            total: total,
+            used: total - free
+          }
+        }
+        return { size: 0, available: 0, total: 0, used: 0 }
       }
     } catch (e) {
-      return { size: 0, available: 0, total: 0 }
+      return { size: 0, available: 0, total: 0, used: 0 }
     }
   }
 
@@ -207,7 +265,7 @@ module.exports.remorahqdatabasesync = function (parent) {
         return resolve({ ok: false, error: 'No connectionString provided' })
       }
       
-      var startTime = Date.now()
+      var connectStartTime = Date.now()
       var client = null
       
       MongoClient.connect(connectionString, {
@@ -215,36 +273,50 @@ module.exports.remorahqdatabasesync = function (parent) {
         serverSelectionTimeoutMS: 8000,
         connectTimeoutMS: 8000
       }).then(function (c) {
-        var latency = Date.now() - startTime
+        var connectLatency = Date.now() - connectStartTime
         client = c
         var db = client.db()
         var dbName = db.databaseName
         
-        logEvent(dbId, 'PROBE', 'Probing database: ' + dbName + ' (latency: ' + latency + 'ms)')
-        
+        var probeStartTime = Date.now()
         return Promise.all([
           db.admin().serverStatus().catch(function () { return null }),
           db.listCollections().toArray().catch(function () { return [] }),
           db.stats().catch(function () { return null }),
           Promise.resolve(dbName),
-          Promise.resolve(latency)
+          Promise.resolve(connectLatency),
+          Promise.resolve(probeStartTime)
         ])
       }).then(function (results) {
+        var probeLatency = Date.now() - results[5]
+        var avgLatency = Math.round((results[4] + probeLatency) / 2)
+        
         var serverStatus = results[0]
         var collections = results[1]
         var dbStats = results[2]
         var dbName = results[3]
-        var latency = results[4]
         var systemMetrics = getSystemMetrics()
+        var diskSpace = getDiskSpace()
+        
+        logEvent(dbId, 'PROBE', 'Probing database: ' + dbName + ' (latency: ' + avgLatency + 'ms)')
+        
+        var networkIO = { in: 0, out: 0, total: 0 }
+        if (serverStatus && serverStatus.network) {
+          networkIO.in = (serverStatus.network.bytesIn || 0) / (1024 * 1024)
+          networkIO.out = (serverStatus.network.bytesOut || 0) / (1024 * 1024)
+          networkIO.total = networkIO.in + networkIO.out
+        }
         
         var metrics = {
           connections: 0, availableConnections: 0, opcounters: null,
           uptime: 0, version: 'unknown', storageSize: 0, dataSize: 0,
-          objects: 0, replicaSet: null, latency: latency,
+          objects: 0, replicaSet: null, latency: avgLatency,
           memoryUsed: systemMetrics.memoryUsed,
           memoryTotal: systemMetrics.memoryTotal,
           memoryPercent: systemMetrics.memoryPercent,
-          cpuPercent: systemMetrics.cpuPercent
+          cpuPercent: systemMetrics.cpuPercent,
+          networkIO: networkIO,
+          diskSpace: diskSpace
         }
         
         if (serverStatus) {
@@ -263,8 +335,8 @@ module.exports.remorahqdatabasesync = function (parent) {
           }
         }
         if (dbStats) {
-          metrics.storageSize = dbStats.storageSize || 0
-          metrics.dataSize = dbStats.dataSize || 0
+          metrics.storageSize = Math.round((dbStats.storageSize || 0) * 100) / 100
+          metrics.dataSize = Math.round((dbStats.dataSize || 0) * 100) / 100
           metrics.objects = dbStats.objects || 0
         }
         
