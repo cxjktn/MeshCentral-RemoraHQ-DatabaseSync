@@ -12,7 +12,7 @@ module.exports.remorahqdatabasesync = function (parent) {
   var obj = {}
 
   obj.pluginid = 'remorahqdatabasesync'
-  obj.version = '0.3.9'
+  obj.version = '0.4.0'
   obj.hasAdminPanel = true
 
   var settingsDb = null
@@ -317,23 +317,19 @@ module.exports.remorahqdatabasesync = function (parent) {
           }),
           db.listCollections().toArray().catch(function () { return [] }),
           db.stats().catch(function () { return null }),
-          db.runCommand({ serverStatus: 1 }).catch(function (err) {
-            console.log('[RemoraHQ-DatabaseSync] Error getting serverStatus via runCommand:', err.message)
-            return null
-          }),
           Promise.resolve(dbName),
           Promise.resolve(connectLatency),
           Promise.resolve(probeStartTime)
         ])
       }).then(function (results) {
-        var connectLatency = results[5]
-        var probeLatency = Date.now() - results[6]
+        var connectLatency = results[4]
+        var probeLatency = Date.now() - results[5]
         var finalLatency = connectLatency
         
-        var serverStatus = results[0] || results[3]
+        var serverStatus = results[0]
         var collections = results[1]
         var dbStats = results[2]
-        var dbName = results[4]
+        var dbName = results[3]
         var systemMetrics = getSystemMetrics()
         var diskSpace = getDiskSpace()
         
@@ -459,7 +455,15 @@ module.exports.remorahqdatabasesync = function (parent) {
         }
         
         var collectionNames = collections.map(function (c) { return c.name })
-        if (client) { client.close().catch(function () { }) }
+        setTimeout(function () {
+          if (client) { 
+            try {
+              client.close().catch(function () { })
+            } catch (e) {
+              console.log('[RemoraHQ-DatabaseSync] Error closing client:', e.message)
+            }
+          }
+        }, 100)
         resolve({ ok: true, dbName: dbName, metrics: metrics, collections: collectionNames })
       }).catch(function (err) {
         if (client) { try { client.close() } catch (e) { } }
