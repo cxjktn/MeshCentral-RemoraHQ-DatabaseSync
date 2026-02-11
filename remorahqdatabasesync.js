@@ -12,11 +12,12 @@ module.exports.remorahqdatabasesync = function (parent) {
   var obj = {}
 
   obj.pluginid = 'remorahqdatabasesync'
-  obj.version = '0.3.8'
+  obj.version = '0.3.9'
   obj.hasAdminPanel = true
 
   var settingsDb = null
   var settingsDbPath = null
+  var networkStatsCache = {} // Кэш для хранения предыдущих значений network stats
   
   if (parent && parent.parent && parent.parent.datapath) {
     var pluginPath = path.join(parent.parent.datapath, 'plugins', 'remorahqdatabasesync')
@@ -316,73 +317,89 @@ module.exports.remorahqdatabasesync = function (parent) {
           }),
           db.listCollections().toArray().catch(function () { return [] }),
           db.stats().catch(function () { return null }),
+          db.runCommand({ serverStatus: 1 }).catch(function (err) {
+            console.log('[RemoraHQ-DatabaseSync] Error getting serverStatus via runCommand:', err.message)
+            return null
+          }),
           Promise.resolve(dbName),
           Promise.resolve(connectLatency),
           Promise.resolve(probeStartTime)
         ])
       }).then(function (results) {
-        var connectLatency = results[4]
-        var probeLatency = Date.now() - results[5]
+        var connectLatency = results[5]
+        var probeLatency = Date.now() - results[6]
         var finalLatency = connectLatency
         
-        var serverStatus = results[0]
+        var serverStatus = results[0] || results[3]
         var collections = results[1]
         var dbStats = results[2]
-        var dbName = results[3]
+        var dbName = results[4]
         var systemMetrics = getSystemMetrics()
         var diskSpace = getDiskSpace()
         
         logEvent(dbId, 'PROBE', 'Probing database: ' + dbName + ' (latency: ' + finalLatency + 'ms)')
         
         var networkIO = { in: 0, out: 0, total: 0 }
+        var currentTime = Date.now()
+        var cacheKey = dbId || 'default'
+        var timeDiff = 15
+        
         try {
           if (process.platform === 'win32') {
             var execSync = require('child_process').execSync
             try {
               var netResult = execSync('chcp 65001 >nul && netstat -e', { encoding: 'utf8', timeout: 5000, shell: true })
               var netLines = netResult.split('\n')
+              var currentBytesIn = 0
+              var currentBytesOut = 0
+              
               for (var i = 0; i < netLines.length; i++) {
                 var line = netLines[i]
                 if (line.indexOf('Bytes') >= 0 || line.indexOf('байт') >= 0 || /^\s*\d+/.test(line)) {
                   var parts = line.trim().split(/\s+/)
                   if (parts.length >= 3) {
-                    var bytesIn = parseFloat(parts[parts.length - 2].replace(/,/g, '').replace(/\s/g, '')) || 0
-                    var bytesOut = parseFloat(parts[parts.length - 1].replace(/,/g, '').replace(/\s/g, '')) || 0
-                    if (bytesIn > 0 || bytesOut > 0) {
-                      networkIO.in = bytesIn / (1024 * 1024)
-                      networkIO.out = bytesOut / (1024 * 1024)
-                      networkIO.total = networkIO.in + networkIO.out
-                      console.log('[RemoraHQ-DatabaseSync] Network I/O from netstat - IN:', networkIO.in.toFixed(2), 'MB, OUT:', networkIO.out.toFixed(2), 'MB')
-                      break
-                    }
+                    currentBytesIn = parseFloat(parts[parts.length - 2].replace(/,/g, '').replace(/\s/g, '')) || 0
+                    currentBytesOut = parseFloat(parts[parts.length - 1].replace(/,/g, '').replace(/\s/g, '')) || 0
+                    break
                   }
                 }
               }
-              if (networkIO.total === 0) {
-                console.log('[RemoraHQ-DatabaseSync] netstat parsing failed, trying MongoDB network stats')
-                if (serverStatus && serverStatus.network) {
-                  networkIO.in = (serverStatus.network.bytesIn || 0) / (1024 * 1024)
-                  networkIO.out = (serverStatus.network.bytesOut || 0) / (1024 * 1024)
-                  networkIO.total = networkIO.in + networkIO.out
-                  console.log('[RemoraHQ-DatabaseSync] Using MongoDB network stats - IN:', networkIO.in.toFixed(2), 'MB, OUT:', networkIO.out.toFixed(2), 'MB')
+              
+              if (currentBytesIn > 0 || currentBytesOut > 0) {
+                if (networkStatsCache[cacheKey]) {
+                  var prev = networkStatsCache[cacheKey]
+                  var bytesInDiff = currentBytesIn - prev.bytesIn
+                  var bytesOutDiff = currentBytesOut - prev.bytesOut
+                  var timeDiffSeconds = (currentTime - prev.timestamp) / 1000
+                  
+                  if (timeDiffSeconds > 0) {
+                    networkIO.in = (bytesInDiff / timeDiffSeconds) / (1024 * 1024)
+                    networkIO.out = (bytesOutDiff / timeDiffSeconds) / (1024 * 1024)
+                    networkIO.total = networkIO.in + networkIO.out
+                    console.log('[RemoraHQ-DatabaseSync] Network I/O (MB/s) - IN:', networkIO.in.toFixed(2), 'OUT:', networkIO.out.toFixed(2), 'Total:', networkIO.total.toFixed(2))
+                  }
                 }
+                
+                networkStatsCache[cacheKey] = {
+                  bytesIn: currentBytesIn,
+                  bytesOut: currentBytesOut,
+                  timestamp: currentTime
+                }
+              }
+              
+              if (networkIO.total === 0 && networkStatsCache[cacheKey]) {
+                console.log('[RemoraHQ-DatabaseSync] First measurement, waiting for next probe to calculate speed')
               }
             } catch (e) {
               console.log('[RemoraHQ-DatabaseSync] Error getting network stats from netstat:', e.message)
-              if (serverStatus && serverStatus.network) {
-                networkIO.in = (serverStatus.network.bytesIn || 0) / (1024 * 1024)
-                networkIO.out = (serverStatus.network.bytesOut || 0) / (1024 * 1024)
-                networkIO.total = networkIO.in + networkIO.out
-                console.log('[RemoraHQ-DatabaseSync] Using MongoDB network stats - IN:', networkIO.in.toFixed(2), 'MB, OUT:', networkIO.out.toFixed(2), 'MB')
-              }
             }
-          } else {
-            if (serverStatus && serverStatus.network) {
-              networkIO.in = (serverStatus.network.bytesIn || 0) / (1024 * 1024)
-              networkIO.out = (serverStatus.network.bytesOut || 0) / (1024 * 1024)
-              networkIO.total = networkIO.in + networkIO.out
-              console.log('[RemoraHQ-DatabaseSync] Using MongoDB network stats - IN:', networkIO.in.toFixed(2), 'MB, OUT:', networkIO.out.toFixed(2), 'MB')
-            }
+          }
+          
+          if (networkIO.total === 0 && serverStatus && serverStatus.network) {
+            networkIO.in = (serverStatus.network.bytesIn || 0) / (1024 * 1024)
+            networkIO.out = (serverStatus.network.bytesOut || 0) / (1024 * 1024)
+            networkIO.total = networkIO.in + networkIO.out
+            console.log('[RemoraHQ-DatabaseSync] Using MongoDB network stats - IN:', networkIO.in.toFixed(2), 'MB, OUT:', networkIO.out.toFixed(2), 'MB')
           }
         } catch (e) {
           console.log('[RemoraHQ-DatabaseSync] Error getting network I/O:', e.message)
@@ -415,7 +432,16 @@ module.exports.remorahqdatabasesync = function (parent) {
           console.log('[RemoraHQ-DatabaseSync] Metrics uptime:', metrics.uptime)
           
           if (!serverStatus.uptime || serverStatus.uptime === 0) {
-            console.log('[RemoraHQ-DatabaseSync] WARNING: uptime is 0 or missing! Full serverStatus:', JSON.stringify(serverStatus).substring(0, 500))
+            console.log('[RemoraHQ-DatabaseSync] WARNING: uptime is 0 or missing! Trying alternative method...')
+            try {
+              var processUptime = process.uptime()
+              if (processUptime > 0) {
+                console.log('[RemoraHQ-DatabaseSync] Using process uptime as fallback:', processUptime, 'seconds')
+                metrics.uptime = Math.floor(processUptime)
+              }
+            } catch (e) {
+              console.log('[RemoraHQ-DatabaseSync] Could not get alternative uptime:', e.message)
+            }
           }
           if (serverStatus.repl) {
             metrics.replicaSet = {
