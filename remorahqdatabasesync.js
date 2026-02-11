@@ -12,7 +12,7 @@ module.exports.remorahqdatabasesync = function (parent) {
   var obj = {}
 
   obj.pluginid = 'remorahqdatabasesync'
-  obj.version = '0.4.2'
+  obj.version = '0.4.3'
   obj.hasAdminPanel = true
 
   var settingsDb = null
@@ -65,6 +65,7 @@ module.exports.remorahqdatabasesync = function (parent) {
           connectionString TEXT NOT NULL,
           dbName TEXT,
           status TEXT,
+          metrics TEXT,
           createdAt INTEGER NOT NULL,
           updatedAt INTEGER NOT NULL
         );
@@ -78,6 +79,18 @@ module.exports.remorahqdatabasesync = function (parent) {
         CREATE INDEX IF NOT EXISTS idx_events_dbId ON events(dbId);
         CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp);
       `)
+      
+      // Добавляем колонку metrics если её нет (для существующих БД)
+      try {
+        var tableInfo = settingsDb.prepare('PRAGMA table_info(databases)').all()
+        var hasMetrics = tableInfo.some(function (col) { return col.name === 'metrics' })
+        if (!hasMetrics) {
+          settingsDb.exec('ALTER TABLE databases ADD COLUMN metrics TEXT')
+          console.log('[RemoraHQ-DatabaseSync] Added metrics column to databases table')
+        }
+      } catch (e) {
+        console.log('[RemoraHQ-DatabaseSync] Error checking/adding metrics column:', e.message)
+      }
       
       var cleanupInterval = setInterval(function () {
         if (settingsDb) {
@@ -120,6 +133,14 @@ module.exports.remorahqdatabasesync = function (parent) {
           if (db.connectionString) {
             db.connectionString = Buffer.from(db.connectionString, 'base64').toString('utf8')
           }
+          // Парсим метрики из JSON строки
+          if (db.metrics && typeof db.metrics === 'string') {
+            try {
+              db.metrics = JSON.parse(db.metrics)
+            } catch (e) {
+              db.metrics = null
+            }
+          }
         } catch (e) { }
         return db
       })
@@ -133,12 +154,13 @@ module.exports.remorahqdatabasesync = function (parent) {
     if (!settingsDb) return false
     try {
       var encrypted = Buffer.from(dbData.connectionString).toString('base64')
+      var metricsJson = dbData.metrics ? JSON.stringify(dbData.metrics) : null
       settingsDb.prepare(`
-        INSERT INTO databases (id, label, connectionString, dbName, status, createdAt, updatedAt)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO databases (id, label, connectionString, dbName, status, metrics, createdAt, updatedAt)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         dbData.id, dbData.label, encrypted, dbData.dbName || '', dbData.status || 'online',
-        Date.now(), Date.now()
+        metricsJson, Date.now(), Date.now()
       )
       logEvent(dbData.id, 'CONN', 'Database connected: ' + dbData.label)
       return true
@@ -152,11 +174,12 @@ module.exports.remorahqdatabasesync = function (parent) {
     if (!settingsDb) return false
     try {
       var encrypted = Buffer.from(dbData.connectionString).toString('base64')
+      var metricsJson = dbData.metrics ? JSON.stringify(dbData.metrics) : null
       settingsDb.prepare(`
-        UPDATE databases SET label = ?, connectionString = ?, dbName = ?, status = ?, updatedAt = ?
+        UPDATE databases SET label = ?, connectionString = ?, dbName = ?, status = ?, metrics = ?, updatedAt = ?
         WHERE id = ?
       `).run(
-        dbData.label, encrypted, dbData.dbName || '', dbData.status || 'online', Date.now(), dbId
+        dbData.label, encrypted, dbData.dbName || '', dbData.status || 'online', metricsJson, Date.now(), dbId
       )
       return true
     } catch (e) {
