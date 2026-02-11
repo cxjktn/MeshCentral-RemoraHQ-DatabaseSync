@@ -1,14 +1,14 @@
 {
   "name": "RemoraHQ - DatabaseSync",
   "shortName": "remorahqdatabasesync",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "author": "RemoraHQ",
   "description": "Database connect for Remora",
   "hasAdminPanel": true,
   
   "homepage": "https://github.com/cxjktn/MeshCentral-RemoraHQ-DatabaseSync/",
   "changelogUrl": "https://raw.githubusercontent.com/cxjktn/MeshCentral-RemoraHQ-DatabaseSync/refs/heads/main/CHANGELOG.md",
-  "configUrl": "ё ",
+  "configUrl": "https://raw.githubusercontent.com/cxjktn/MeshCentral-RemoraHQ-DatabaseSync/refs/heads/main/config.json",
   "downloadUrl": "https://github.com/cxjktn/MeshCentral-RemoraHQ-DatabaseSync/archive/refs/heads/main.zip",
   "repository": {
     "type": "git",
